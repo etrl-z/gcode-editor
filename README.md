@@ -27,12 +27,12 @@ From the project directory, install PyInstaller and build a single-file Windows 
 
 ```powershell
 python -m pip install PyQt6 PyInstaller
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name GCodeLayerEditor --add-data "mouse_icon.svg;." main.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name GCodeLayerEditor --icon mouse_icon.ico --add-data "mouse_icon.svg;." main.py
 ```
 
 The executable will be created at `dist\GCodeLayerEditor.exe`.
 
-## Install and add to “Open with”
+## Install and add to "Open with"
 
 After building, run the installer script from PowerShell:
 
