@@ -100,7 +100,11 @@ class GcodeEditor(QMainWindow):
         self.highlighter = GcodeHighlighter(self.editor.document())
 
     def initUI(self):
+        from pathlib import Path
+        from PyQt6.QtGui import QIcon
+
         self.setWindowTitle(f'G-code Layer Editor - {self.file_path}')
+        self.setWindowIcon(QIcon(str(Path(__file__).with_name('mouse_icon.svg'))))
         self.resize(1000, 700)
 
         toolbar = QToolBar("Toolbar")

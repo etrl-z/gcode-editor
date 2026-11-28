@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#202a44"/>
+  <path d="M82 84c15 0 22 8 22 17s-8 15-18 15" fill="none" stroke="#e0a747" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="41" cy="39" r="22" fill="#d8c5b7"/>
+  <circle cx="87" cy="39" r="22" fill="#d8c5b7"/>
+  <circle cx="41" cy="39" r="13" fill="#e9a1a0"/>
+  <circle cx="87" cy="39" r="13" fill="#e9a1a0"/>
+  <path d="M31 69c0-17 13-30 33-30s33 13 33 30v19c0 17-13 29-33 29S31 105 31 88z" fill="#f0e2d4"/>
+  <path d="M45 68l14 2m18-2-14 2" fill="none" stroke="#51424a" stroke-width="4" stroke-linecap="round"/>
+  <ellipse cx="52" cy="77" rx="4" ry="5" fill="#51424a"/>
+  <ellipse cx="76" cy="77" rx="4" ry="5" fill="#51424a"/>
+  <path d="M60 88c0-3 2-5 4-5s4 2 4 5-2 5-4 5-4-2-4-5" fill="#d87982"/>
+  <path d="M55 97c5 4 13 4 18 0" fill="none" stroke="#725b59" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M45 90l-17-4m17 10-18 2m56-8 17-4m-17 10 18 2" fill="none" stroke="#a58b7b" stroke-width="2" stroke-linecap="round"/>
+</svg>
