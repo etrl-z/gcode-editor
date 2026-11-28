@@ -1,9 +1,10 @@
 import sys
 import re
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QPlainTextEdit, QListWidget, QListWidgetItem, QLabel, QMessageBox, QToolBar, QAbstractItemView, QWidget, QFileDialog, QLineEdit)
+                             QHBoxLayout, QPlainTextEdit, QListWidget, QListWidgetItem, QLabel, QMessageBox, QToolBar, QAbstractItemView, QFileDialog, QLineEdit)
 from PyQt6.QtGui import QAction, QPalette, QColor, QSyntaxHighlighter, QTextCharFormat, QFont, QPainter, QTextCursor
-from PyQt6.QtCore import Qt, QSize, QRect
+from PyQt6.QtCore import Qt, QSize, QRect, QSettings
+from pathlib import Path
 from gcode_parser import GcodeParser
 
 class LineNumberArea(QWidget):
@@ -101,9 +102,13 @@ class GcodeHighlighter(QSyntaxHighlighter):
                 self.setFormat(match.start(), match.end() - match.start(), fmt)
 
 class GcodeEditor(QMainWindow):
+    MAX_RECENT_FILES = 10
+
     def __init__(self, file_path):
         super().__init__()
         self.file_path = file_path
+        self.settings = QSettings("GCodeEditor", "GCodeLayerEditor")
+        self.recent_files = self.settings.value("recent_files", [], type=list)
         self.parser = GcodeParser(file_path)
         self.layers = self.parser.parse()
 
@@ -112,9 +117,9 @@ class GcodeEditor(QMainWindow):
 
         self.initUI()
         self.highlighter = GcodeHighlighter(self.editor.document())
+        self.add_recent_file(file_path)
 
     def initUI(self):
-        from pathlib import Path
         from PyQt6.QtGui import QIcon
 
         self.setWindowTitle(f'G-code Layer Editor - {self.file_path}')
@@ -158,7 +163,9 @@ class GcodeEditor(QMainWindow):
         file_menu = menubar.addMenu('&File')
         file_menu.addAction("New Project", self.new_project)
         file_menu.addAction("Open File(s)", self.open_file)
-        file_menu.addAction("Open Recent", self.open_recent)
+        self.recent_menu = file_menu.addMenu("Open Recent")
+        self.recent_menu.aboutToShow.connect(self.open_recent)
+        self.refresh_recent_menu()
         
         save_action = QAction("&Save Project", self)
         save_action.triggered.connect(self.save_gcode)
@@ -174,31 +181,37 @@ class GcodeEditor(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
-        # Options Menu
-        options_menu = menubar.addMenu('&Options')
+        # Edit Menu
+        edit_menu = menubar.addMenu('&Edit')
         
         self.undo_action = QAction("&Undo", self)
         self.undo_action.setShortcut("Ctrl+Z")
         self.undo_action.triggered.connect(lambda: self.editor.undo())
-        options_menu.addAction(self.undo_action)
+        edit_menu.addAction(self.undo_action)
         
         self.redo_action = QAction("&Redo", self)
         self.redo_action.setShortcut("Ctrl+Y")
         self.redo_action.triggered.connect(lambda: self.editor.redo())
-        options_menu.addAction(self.redo_action)
+        edit_menu.addAction(self.redo_action)
         
         select_all_action = QAction("Select All", self)
         select_all_action.setShortcut("Ctrl+A")
         select_all_action.triggered.connect(self.editor.selectAll)
-        options_menu.addAction(select_all_action)
+        edit_menu.addAction(select_all_action)
+
+        delete_action = QAction("&Delete", self)
+        delete_action.setShortcut("Delete")
+        delete_action.triggered.connect(self.delete_selected_layers)
+        edit_menu.addAction(delete_action)
+        edit_menu.addSeparator()
         
         comment_action = QAction("&Comment", self)
         comment_action.triggered.connect(self.comment_selection)
-        options_menu.addAction(comment_action)
+        edit_menu.addAction(comment_action)
         
         uncomment_action = QAction("&Uncomment", self)
         uncomment_action.triggered.connect(self.uncomment_selection)
-        options_menu.addAction(uncomment_action)
+        edit_menu.addAction(uncomment_action)
 
         # Settings Menu
         settings_menu = menubar.addMenu('&Settings')
@@ -219,6 +232,8 @@ class GcodeEditor(QMainWindow):
         toolbar.addAction(self.undo_action)
         toolbar.addAction(self.redo_action)
         toolbar.addSeparator()
+        toolbar.addAction(delete_action)
+        toolbar.addSeparator()
         toolbar.addAction(comment_action)
         toolbar.addAction(uncomment_action)
         
@@ -232,6 +247,28 @@ class GcodeEditor(QMainWindow):
         self.editor.document().redoAvailable.connect(self.redo_action.setEnabled)
         self.undo_action.setEnabled(False)
         self.redo_action.setEnabled(False)
+
+    def delete_selected_layers(self):
+        """Deletes each selected or checked layer through the next layer marker."""
+        ranges = self.get_target_layer_ranges()
+        if not ranges:
+            QMessageBox.warning(self, "Warning", "Please select at least one layer.")
+            return
+
+        lines = self.editor.toPlainText().splitlines()
+        for start_line, end_line in reversed(ranges):
+            del lines[start_line:min(end_line, len(lines))]
+
+        self.editor.setPlainText('\n'.join(lines))
+        self.layers = self.parser.parse_lines(lines)
+        self.layer_list.clear()
+        for layer_index, line_number, z_height in self.layers:
+            item = QListWidgetItem(f'Layer {layer_index} (Z={z_height}mm) - Line {line_number}')
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.layer_list.addItem(item)
+        self.clear_layer_checks()
+        self.refresh_layer_colors()
 
     def jump_to_layer(self, item):
         match = re.search(r'Layer (\d+)', item.text())
@@ -289,6 +326,22 @@ class GcodeEditor(QMainWindow):
             ranges.append((start_line - 1, end_line))
         return ranges
 
+    def clear_layer_checks(self):
+        for row in range(self.layer_list.count()):
+            self.layer_list.item(row).setCheckState(Qt.CheckState.Unchecked)
+
+    def refresh_layer_colors(self):
+        """Gray out layers whose non-empty lines are all comments."""
+        lines = self.editor.toPlainText().splitlines()
+        normal_color = self.layer_list.palette().color(QPalette.ColorRole.Text)
+        commented_color = QColor("#808080")
+        for row, layer in enumerate(self.layers):
+            start = layer[1] - 1
+            end = self.layers[row + 1][1] - 1 if row + 1 < len(self.layers) else len(lines)
+            layer_lines = [line.strip() for line in lines[start:end] if line.strip()]
+            is_commented = bool(layer_lines) and all(line.startswith(';') for line in layer_lines)
+            self.layer_list.item(row).setForeground(commented_color if is_commented else normal_color)
+
     def comment_selection(self):
         ranges = self.get_target_layer_ranges()
         if not ranges:
@@ -312,6 +365,8 @@ class GcodeEditor(QMainWindow):
 
         self.editor.setTextCursor(old_cursor)
         self.editor.verticalScrollBar().setValue(scroll_value)
+        self.clear_layer_checks()
+        self.refresh_layer_colors()
 
     def set_theme(self, theme):
         editor_palette = QPalette()
@@ -345,6 +400,8 @@ class GcodeEditor(QMainWindow):
         self.editor.setPlainText('\n'.join(lines))
         cursor.endEditBlock()
         self.editor.setTextCursor(old_cursor)
+        self.clear_layer_checks()
+        self.refresh_layer_colors()
 
     def save_gcode(self):
         """Saves the current G-code content to the file."""
@@ -359,6 +416,7 @@ class GcodeEditor(QMainWindow):
             with open(self.file_path, 'w') as f:
                 f.write(self.editor.toPlainText())
             self.original_content = self.editor.toPlainText()
+            self.add_recent_file(self.file_path)
             QMessageBox.information(self, "Success", "File saved successfully.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save file: {e}")
@@ -386,14 +444,54 @@ class GcodeEditor(QMainWindow):
             self.load_file(file_path)
 
     def open_recent(self):
-        """Placeholder for opening recent files."""
-        QMessageBox.information(self, "Open Recent", "Recent files list not yet implemented.")
+        """Refreshes the recent files submenu."""
+        self.refresh_recent_menu()
+
+    def add_recent_file(self, file_path):
+        """Adds an existing file to the persistent recent files list."""
+        if not file_path or file_path == "untitled.gcode":
+            return
+        path = str(Path(file_path).expanduser().resolve())
+        if not Path(path).is_file():
+            return
+        self.recent_files = [path] + [item for item in self.recent_files if item != path]
+        self.recent_files = self.recent_files[:self.MAX_RECENT_FILES]
+        self.settings.setValue("recent_files", self.recent_files)
+        self.refresh_recent_menu()
+
+    def refresh_recent_menu(self):
+        """Rebuilds the menu and drops paths that no longer exist."""
+        self.recent_menu.clear()
+        self.recent_files = [path for path in self.recent_files if Path(path).is_file()]
+        self.settings.setValue("recent_files", self.recent_files)
+        if not self.recent_files:
+            empty_action = self.recent_menu.addAction("(No recent files)")
+            empty_action.setEnabled(False)
+        else:
+            for path in self.recent_files:
+                action = self.recent_menu.addAction(path)
+                action.setToolTip(path)
+                action.triggered.connect(lambda checked=False, recent_path=path: self.load_file(recent_path))
+            self.recent_menu.addSeparator()
+            self.recent_menu.addAction("Clear Recent Files", self.clear_recent_files)
+
+    def clear_recent_files(self):
+        self.recent_files = []
+        self.settings.remove("recent_files")
+        self.refresh_recent_menu()
 
     def load_file(self, file_path):
         """Loads a G-code file and refreshes the UI."""
-        self.file_path = file_path
-        with open(self.file_path, 'r') as f:
-            self.original_content = f.read()
+        try:
+            with open(file_path, 'r') as f:
+                content = f.read()
+        except OSError as e:
+            QMessageBox.critical(self, "Error", f"Failed to open file: {e}")
+            self.refresh_recent_menu()
+            return
+
+        self.file_path = str(Path(file_path).resolve())
+        self.original_content = content
         self.editor.setPlainText(self.original_content)
         self.setWindowTitle(f'G-code Layer Editor - {self.file_path}')
         
@@ -406,6 +504,9 @@ class GcodeEditor(QMainWindow):
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Unchecked)
             self.layer_list.addItem(item)
+
+        self.add_recent_file(self.file_path)
+        self.refresh_layer_colors()
         
         # Reset undo/redo
         self.editor.document().undoAvailable.connect(self.undo_action.setEnabled)
