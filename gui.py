@@ -1,10 +1,10 @@
 import sys
 import re
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QPlainTextEdit, QListWidget, QLabel, QMessageBox, QToolBar, QAbstractItemView, QWidget)
+                             QHBoxLayout, QPlainTextEdit, QListWidget, QListWidgetItem, QLabel, QMessageBox, QToolBar, QAbstractItemView, QWidget, QFileDialog, QLineEdit)
 from PyQt6.QtGui import QAction, QPalette, QColor, QSyntaxHighlighter, QTextCharFormat, QFont, QPainter, QTextCursor
 from PyQt6.QtCore import Qt, QSize, QRect
-from parser import GcodeParser
+from gcode_parser import GcodeParser
 
 class LineNumberArea(QWidget):
     def __init__(self, editor):
@@ -63,15 +63,29 @@ class GcodeHighlighter(QSyntaxHighlighter):
     def __init__(self, document):
         super().__init__(document)
         self.comment_format = QTextCharFormat()
-        self.comment_format.setForeground(QColor("#4caf50"))
         self.x_format = QTextCharFormat()
-        self.x_format.setForeground(QColor("#ff5252"))
         self.y_format = QTextCharFormat()
-        self.y_format.setForeground(QColor("#ffeb3b"))
         self.z_format = QTextCharFormat()
-        self.z_format.setForeground(QColor("#2196f3"))
         self.default_format = QTextCharFormat()
-        self.default_format.setForeground(QColor("white"))
+        self.set_theme('dark')
+
+    def set_theme(self, theme):
+        colors = {
+            'dark': {
+                'text': '#ffffff', 'comment': '#81c784',
+                'x': '#ff6b6b', 'y': '#ffd54f', 'z': '#64b5f6',
+            },
+            'light': {
+                'text': '#202124', 'comment': '#26733a',
+                'x': '#b3261e', 'y': '#806000', 'z': '#1456a0',
+            },
+        }[theme]
+        self.default_format.setForeground(QColor(colors['text']))
+        self.comment_format.setForeground(QColor(colors['comment']))
+        self.x_format.setForeground(QColor(colors['x']))
+        self.y_format.setForeground(QColor(colors['y']))
+        self.z_format.setForeground(QColor(colors['z']))
+        self.rehighlight()
 
     def highlightBlock(self, text):
         comment_match = re.search(r';.*', text)
@@ -107,34 +121,15 @@ class GcodeEditor(QMainWindow):
         self.setWindowIcon(QIcon(str(Path(__file__).with_name('mouse_icon.svg'))))
         self.resize(1000, 700)
 
-        toolbar = QToolBar("Toolbar")
-        toolbar.setIconSize(QSize(24, 24))
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+        # Create editor first
+        self.editor = CodeEditor()
+        self.editor.setFont(QFont("Courier New", 10))
+        editor_palette = QPalette()
+        editor_palette.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
+        editor_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
+        self.editor.setPalette(editor_palette)
 
-        self.undo_action = QAction(self.style().standardIcon(self.style().StandardPixmap.SP_ArrowBack), "&Annulla", self)
-        self.undo_action.setShortcut("Ctrl+Z")
-        self.undo_action.triggered.connect(lambda: self.editor.undo())
-        toolbar.addAction(self.undo_action)
-
-        self.redo_action = QAction(self.style().standardIcon(self.style().StandardPixmap.SP_ArrowForward), "&Ripeti", self)
-        self.redo_action.setShortcut("Ctrl+Y")
-        self.redo_action.triggered.connect(lambda: self.editor.redo())
-        toolbar.addAction(self.redo_action)
-
-        toolbar.addSeparator()
-
-        btn_comment = QAction("Commenta selezione", self)
-        btn_comment.triggered.connect(self.comment_selection)
-        toolbar.addAction(btn_comment)
-
-        btn_save = QAction("Salva", self)
-        btn_save.triggered.connect(self.save_gcode)
-        toolbar.addAction(btn_save)
-
-        btn_reset = QAction("Ripristina dati iniziali", self)
-        btn_reset.triggered.connect(self.reset_data)
-        toolbar.addAction(btn_reset)
-
+        # Create layout
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QHBoxLayout(main_widget)
@@ -143,67 +138,174 @@ class GcodeEditor(QMainWindow):
         self.layer_list = QListWidget()
         self.layer_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         for layer_index, line_number, z_height in self.layers:
-            self.layer_list.addItem(f'Layer {layer_index} (Z={z_height}mm) - Linea {line_number}')
+            item = QListWidgetItem(f'Layer {layer_index} (Z={z_height}mm) - Line {line_number}')
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.layer_list.addItem(item)
 
         self.layer_list.itemClicked.connect(self.jump_to_layer)
-        left_layout.addWidget(QLabel("Navigazione Layer (Shift per multi-sel):"))
+        left_layout.addWidget(QLabel("Layer Navigation (Shift for multi-sel):"))
         left_layout.addWidget(self.layer_list)
 
         layout.addLayout(left_layout, 1)
 
-        self.editor = CodeEditor()
-        self.editor.setFont(QFont("Courier New", 10))
-        editor_palette = QPalette()
-        editor_palette.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
-        editor_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
-        self.editor.setPalette(editor_palette)
+        layout.addWidget(self.editor, 3)
+
+        # Menu Bar
+        menubar = self.menuBar()
+        
+        # File Menu
+        file_menu = menubar.addMenu('&File')
+        file_menu.addAction("New Project", self.new_project)
+        file_menu.addAction("Open File(s)", self.open_file)
+        file_menu.addAction("Open Recent", self.open_recent)
+        
+        save_action = QAction("&Save Project", self)
+        save_action.triggered.connect(self.save_gcode)
+        file_menu.addAction(save_action)
+        
+        reload_action = QAction("&Reload Original Settings", self)
+        reload_action.triggered.connect(self.reset_data)
+        file_menu.addAction(reload_action)
+        
+        file_menu.addSeparator()
+        
+        quit_action = QAction("&Quit", self)
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+        # Options Menu
+        options_menu = menubar.addMenu('&Options')
+        
+        self.undo_action = QAction("&Undo", self)
+        self.undo_action.setShortcut("Ctrl+Z")
+        self.undo_action.triggered.connect(lambda: self.editor.undo())
+        options_menu.addAction(self.undo_action)
+        
+        self.redo_action = QAction("&Redo", self)
+        self.redo_action.setShortcut("Ctrl+Y")
+        self.redo_action.triggered.connect(lambda: self.editor.redo())
+        options_menu.addAction(self.redo_action)
+        
+        select_all_action = QAction("Select All", self)
+        select_all_action.setShortcut("Ctrl+A")
+        select_all_action.triggered.connect(self.editor.selectAll)
+        options_menu.addAction(select_all_action)
+        
+        comment_action = QAction("&Comment", self)
+        comment_action.triggered.connect(self.comment_selection)
+        options_menu.addAction(comment_action)
+        
+        uncomment_action = QAction("&Uncomment", self)
+        uncomment_action.triggered.connect(self.uncomment_selection)
+        options_menu.addAction(uncomment_action)
+
+        # Settings Menu
+        settings_menu = menubar.addMenu('&Settings')
+        theme_menu = settings_menu.addMenu('Theme')
+        theme_menu.addAction('Light', lambda: self.set_theme('light'))
+        theme_menu.addAction('Dark', lambda: self.set_theme('dark'))
+
+        # About Menu
+        about_menu = menubar.addMenu('&About')
+        about_action = QAction("&About", self)
+        about_action.triggered.connect(lambda: QMessageBox.about(self, "About", "G-code Layer Editor v1.0"))
+        about_menu.addAction(about_action)
+
+        # Toolbar
+        toolbar = QToolBar("Toolbar")
+        toolbar.setIconSize(QSize(24, 24))
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+        toolbar.addAction(self.undo_action)
+        toolbar.addAction(self.redo_action)
+        toolbar.addSeparator()
+        toolbar.addAction(comment_action)
+        toolbar.addAction(uncomment_action)
+        
+        self.search_bar = QLineEdit()
+        self.search_bar.setPlaceholderText("Search...")
+        self.search_bar.textChanged.connect(self.search_text)
+        toolbar.addWidget(self.search_bar)
 
         self.editor.setPlainText(self.original_content)
         self.editor.document().undoAvailable.connect(self.undo_action.setEnabled)
         self.editor.document().redoAvailable.connect(self.redo_action.setEnabled)
         self.undo_action.setEnabled(False)
         self.redo_action.setEnabled(False)
-        layout.addWidget(self.editor, 3)
 
     def jump_to_layer(self, item):
-        match = re.search(r'Linea (\d+)', item.text())
+        match = re.search(r'Layer (\d+)', item.text())
         if match:
-            line_number = int(match.group(1)) - 1
-            cursor = QTextCursor(self.editor.document().findBlockByNumber(line_number))
+            layer_index = int(match.group(1))
+            search_str = f';LAYER:{layer_index}'
+            
+            # Search in the document
+            cursor = self.editor.document().find(search_str)
+            if not cursor.isNull():
+                self.editor.setTextCursor(cursor)
+                self.editor.centerCursor()
+
+    def search_text(self, text):
+        """Select the next occurrence of the search text in the editor."""
+        if not text:
+            cursor = self.editor.textCursor()
+            cursor.clearSelection()
             self.editor.setTextCursor(cursor)
+            return
+
+        cursor = self.editor.textCursor()
+        match = self.editor.document().find(text, cursor)
+        if match.isNull():
+            match = self.editor.document().find(text, QTextCursor(self.editor.document()))
+        if not match.isNull():
+            self.editor.setTextCursor(match)
             self.editor.centerCursor()
 
     def get_line_number(self, item_text):
-        match = re.search(r'Linea (\d+)', item_text)
+        match = re.search(r'Line (\d+)', item_text)
         return int(match.group(1)) if match else None
 
-    def comment_selection(self):
-        selected_items = self.layer_list.selectedItems()
-        if not selected_items:
-            QMessageBox.warning(self, "Attenzione", "Seleziona almeno un layer.")
-            return
+    def get_target_layer_ranges(self):
+        """Return line ranges for selected or checked layers."""
+        target_rows = {
+            self.layer_list.row(item)
+            for item in self.layer_list.selectedItems()
+        }
+        target_rows.update(
+            row for row in range(self.layer_list.count())
+            if self.layer_list.item(row).checkState() == Qt.CheckState.Checked
+        )
 
-        selected_items.sort(key=lambda item: self.layer_list.row(item))
-        start_line = self.get_line_number(selected_items[0].text()) - 1
-        last_item_idx = self.layer_list.row(selected_items[-1])
-        if last_item_idx + 1 < len(self.layers):
-            end_line = self.layers[last_item_idx + 1][1] - 1
-        else:
-            end_line = self.editor.document().lineCount()
+        ranges = []
+        for row in sorted(target_rows):
+            start_line = self.get_line_number(self.layer_list.item(row).text())
+            if start_line is None:
+                continue
+            end_line = (
+                self.layers[row + 1][1] - 1
+                if row + 1 < len(self.layers)
+                else self.editor.document().lineCount()
+            )
+            ranges.append((start_line - 1, end_line))
+        return ranges
+
+    def comment_selection(self):
+        ranges = self.get_target_layer_ranges()
+        if not ranges:
+            QMessageBox.warning(self, "Warning", "Please select at least one layer.")
+            return
 
         old_cursor = self.editor.textCursor()
         scroll_value = self.editor.verticalScrollBar().value()
-
-        # Usiamo il cursore per raggruppare l'azione
         cursor = self.editor.textCursor()
         cursor.beginEditBlock()
-
         text = self.editor.toPlainText()
         lines = text.splitlines()
 
-        for i in range(start_line, min(end_line, len(lines))):
-            if i < len(lines) and not lines[i].startswith(';'):
-                lines[i] = ';' + lines[i]
+        for start_line, end_line in ranges:
+            for i in range(start_line, min(end_line, len(lines))):
+                if not lines[i].startswith(';'):
+                    lines[i] = ';' + lines[i]
 
         self.editor.setPlainText('\n'.join(lines))
         cursor.endEditBlock()
@@ -211,15 +313,105 @@ class GcodeEditor(QMainWindow):
         self.editor.setTextCursor(old_cursor)
         self.editor.verticalScrollBar().setValue(scroll_value)
 
+    def set_theme(self, theme):
+        editor_palette = QPalette()
+        if theme == 'dark':
+            editor_palette.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
+            editor_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
+        else:
+            editor_palette.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white)
+            editor_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.black)
+        self.editor.setPalette(editor_palette)
+        if hasattr(self, 'highlighter'):
+            self.highlighter.set_theme(theme)
+
+    def uncomment_selection(self):
+        ranges = self.get_target_layer_ranges()
+        if not ranges:
+            QMessageBox.warning(self, "Warning", "Please select at least one layer.")
+            return
+
+        old_cursor = self.editor.textCursor()
+        cursor = self.editor.textCursor()
+        cursor.beginEditBlock()
+        text = self.editor.toPlainText()
+        lines = text.splitlines()
+
+        for start_line, end_line in ranges:
+            for i in range(start_line, min(end_line, len(lines))):
+                if lines[i].startswith(';'):
+                    lines[i] = lines[i][1:]
+
+        self.editor.setPlainText('\n'.join(lines))
+        cursor.endEditBlock()
+        self.editor.setTextCursor(old_cursor)
+
     def save_gcode(self):
+        """Saves the current G-code content to the file."""
+        if not self.file_path or self.file_path == "untitled.gcode":
+            path, _ = QFileDialog.getSaveFileName(self, "Save G-code File", "", "G-code Files (*.gcode *.nc *.txt);;All Files (*)")
+            if not path:
+                return
+            self.file_path = path
+            self.setWindowTitle(f'G-code Layer Editor - {self.file_path}')
+
         try:
-            with open(self.file_path, 'w') as f: f.write(self.editor.toPlainText())
-            QMessageBox.information(self, "Salvataggio", "G-code salvato!")
-        except Exception as e: QMessageBox.critical(self, "Errore", f"{e}")
+            with open(self.file_path, 'w') as f:
+                f.write(self.editor.toPlainText())
+            self.original_content = self.editor.toPlainText()
+            QMessageBox.information(self, "Success", "File saved successfully.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save file: {e}")
 
     def reset_data(self):
-        if QMessageBox.question(self, 'Conferma', 'Ripristinare?') == QMessageBox.StandardButton.Yes:
+        """Resets the editor content to the original state."""
+        if QMessageBox.question(self, 'Reset Data', 'Are you sure you want to reload the original file content? Unsaved changes will be lost.') == QMessageBox.StandardButton.Yes:
             self.editor.setPlainText(self.original_content)
+
+    def new_project(self):
+        """Creates a new empty G-code project."""
+        if QMessageBox.question(self, 'New Project', 'Create new project? Unsaved changes will be lost.') == QMessageBox.StandardButton.Yes:
+            self.file_path = "untitled.gcode"
+            self.original_content = ""
+            self.editor.setPlainText("")
+            self.setWindowTitle(f'G-code Layer Editor - {self.file_path}')
+            self.layer_list.clear()
+            self.layers = []
+            self.parser = GcodeParser(self.file_path)
+
+    def open_file(self):
+        """Opens a file dialog to select a G-code file."""
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open G-code File", "", "G-code Files (*.gcode *.nc *.txt);;All Files (*)")
+        if file_path:
+            self.load_file(file_path)
+
+    def open_recent(self):
+        """Placeholder for opening recent files."""
+        QMessageBox.information(self, "Open Recent", "Recent files list not yet implemented.")
+
+    def load_file(self, file_path):
+        """Loads a G-code file and refreshes the UI."""
+        self.file_path = file_path
+        with open(self.file_path, 'r') as f:
+            self.original_content = f.read()
+        self.editor.setPlainText(self.original_content)
+        self.setWindowTitle(f'G-code Layer Editor - {self.file_path}')
+        
+        # Re-parse layers
+        self.parser = GcodeParser(self.file_path)
+        self.layers = self.parser.parse()
+        self.layer_list.clear()
+        for layer_index, line_number, z_height in self.layers:
+            item = QListWidgetItem(f'Layer {layer_index} (Z={z_height}mm) - Line {line_number}')
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.layer_list.addItem(item)
+        
+        # Reset undo/redo
+        self.editor.document().undoAvailable.connect(self.undo_action.setEnabled)
+        self.editor.document().redoAvailable.connect(self.redo_action.setEnabled)
+        self.undo_action.setEnabled(False)
+        self.redo_action.setEnabled(False)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

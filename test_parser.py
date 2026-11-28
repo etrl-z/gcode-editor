@@ -1,4 +1,4 @@
-from parser import GcodeParser
+from gcode_parser import GcodeParser
 
 parser = GcodeParser('test.gcode')
 layers = parser.parse()
