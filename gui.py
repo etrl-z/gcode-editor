@@ -90,16 +90,17 @@ class GcodeHighlighter(QSyntaxHighlighter):
 
     def highlightBlock(self, text):
         comment_match = re.search(r';.*', text)
+        code_end = comment_match.start() if comment_match else len(text)
+        self.setFormat(0, len(text), self.default_format)
+
         if comment_match:
-            start = comment_match.start()
-            self.setFormat(0, start, self.default_format)
-            self.setFormat(start, len(text) - start, self.comment_format)
-        else:
-            self.setFormat(0, len(text), self.default_format)
-            for match in re.finditer(r'([XYZ])([\d\.]+)', text):
-                char = match.group(1)
-                fmt = self.x_format if char == 'X' else (self.y_format if char == 'Y' else self.z_format)
-                self.setFormat(match.start(), match.end() - match.start(), fmt)
+            self.setFormat(code_end, len(text) - code_end, self.comment_format)
+
+        coordinate_pattern = r'([XYZ])([-+]?(?:\d+(?:\.\d*)?|\.\d+))'
+        for match in re.finditer(coordinate_pattern, text[:code_end], re.IGNORECASE):
+            char = match.group(1).upper()
+            fmt = self.x_format if char == 'X' else (self.y_format if char == 'Y' else self.z_format)
+            self.setFormat(match.start(), match.end() - match.start(), fmt)
 
 class GcodeEditor(QMainWindow):
     MAX_RECENT_FILES = 10
