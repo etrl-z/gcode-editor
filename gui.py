@@ -186,12 +186,12 @@ class GcodeEditor(QMainWindow):
         
         self.undo_action = QAction("&Undo", self)
         self.undo_action.setShortcut("Ctrl+Z")
-        self.undo_action.triggered.connect(lambda: self.editor.undo())
+        self.undo_action.triggered.connect(self.undo_editor)
         edit_menu.addAction(self.undo_action)
         
         self.redo_action = QAction("&Redo", self)
         self.redo_action.setShortcut("Ctrl+Y")
-        self.redo_action.triggered.connect(lambda: self.editor.redo())
+        self.redo_action.triggered.connect(self.redo_editor)
         edit_menu.addAction(self.redo_action)
         
         select_all_action = QAction("Select All", self)
@@ -255,11 +255,30 @@ class GcodeEditor(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please select at least one layer.")
             return
 
-        lines = self.editor.toPlainText().splitlines()
-        for start_line, end_line in reversed(ranges):
-            del lines[start_line:min(end_line, len(lines))]
+        document = self.editor.document()
+        positions = []
+        for start_line, end_line in ranges:
+            start_block = document.findBlockByNumber(start_line)
+            if end_line < document.blockCount():
+                end_position = document.findBlockByNumber(end_line).position()
+            else:
+                end_position = document.characterCount() - 1
+            positions.append((start_block.position(), end_position))
 
-        self.editor.setPlainText('\n'.join(lines))
+        cursor = self.editor.textCursor()
+        cursor.beginEditBlock()
+        for start_position, end_position in reversed(positions):
+            cursor.setPosition(start_position)
+            cursor.setPosition(end_position, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+        cursor.endEditBlock()
+
+        self.refresh_layers_from_editor()
+        self.clear_layer_checks()
+
+    def refresh_layers_from_editor(self):
+        """Rebuilds layer navigation from the current editor contents."""
+        lines = self.editor.toPlainText().splitlines()
         self.layers = self.parser.parse_lines(lines)
         self.layer_list.clear()
         for layer_index, line_number, z_height in self.layers:
@@ -267,8 +286,15 @@ class GcodeEditor(QMainWindow):
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Unchecked)
             self.layer_list.addItem(item)
-        self.clear_layer_checks()
         self.refresh_layer_colors()
+
+    def undo_editor(self):
+        self.editor.undo()
+        self.refresh_layers_from_editor()
+
+    def redo_editor(self):
+        self.editor.redo()
+        self.refresh_layers_from_editor()
 
     def jump_to_layer(self, item):
         match = re.search(r'Layer (\d+)', item.text())
@@ -425,6 +451,7 @@ class GcodeEditor(QMainWindow):
         """Resets the editor content to the original state."""
         if QMessageBox.question(self, 'Reset Data', 'Are you sure you want to reload the original file content? Unsaved changes will be lost.') == QMessageBox.StandardButton.Yes:
             self.editor.setPlainText(self.original_content)
+            self.refresh_layers_from_editor()
 
     def new_project(self):
         """Creates a new empty G-code project."""

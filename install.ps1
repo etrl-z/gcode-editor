@@ -7,7 +7,8 @@ if (-not (Test-Path -LiteralPath $sourceExe)) {
 
 $installDir = Join-Path $env:LOCALAPPDATA 'Programs\GCodeLayerEditor'
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-$installedExe = Join-Path $installDir 'GCodeLayerEditor.exe'
+$exeHash = (Get-FileHash -LiteralPath $sourceExe -Algorithm SHA256).Hash.Substring(0, 12)
+$installedExe = Join-Path $installDir "GCodeLayerEditor-$exeHash.exe"
 Copy-Item -LiteralPath $sourceExe -Destination $installedExe -Force
 
 $classes = 'HKCU:\Software\Classes'
