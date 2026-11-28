@@ -1,18 +1,25 @@
 import sys
+import os
 from gui import GcodeEditor
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QFileDialog
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    # Get filename from arguments, otherwise prompt user or show error
     filename = sys.argv[1] if len(sys.argv) > 1 else None
 
-    # Simple check if file exists
-    import os
     if filename and not os.path.exists(filename):
-        print(f"File not found: {filename}")
-        sys.exit(1)
+        filename = None
 
-    editor = GcodeEditor(filename or 'test.gcode') # fallback
+    if not filename:
+        filename, _ = QFileDialog.getOpenFileName(
+            None,
+            "Open G-code File",
+            "",
+            "G-code Files (*.gcode *.nc *.txt);;All Files (*)",
+        )
+        if not filename:
+            sys.exit(0)
+
+    editor = GcodeEditor(filename)
     editor.show()
     sys.exit(app.exec())
